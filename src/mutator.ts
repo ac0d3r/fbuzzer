@@ -62,9 +62,6 @@ export class CorpusManager {
     }
 
     pick(): Uint8Array {
-        if (this.corpus.length === 0) {
-            return new Uint8Array([0x41, 0x42, 0x43]);
-        }
         const idx = Math.floor(Math.random() * this.corpus.length);
         return this.corpus[idx];
     }

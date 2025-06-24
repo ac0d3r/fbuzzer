@@ -1,4 +1,4 @@
-import { Mutator, CorpusManager } from "./mutator";
+import { Mutator, CorpusManager } from "./mutator.js";
 
 export class CoverageCollector {
     public DEBUG: boolean = false;
@@ -7,7 +7,7 @@ export class CoverageCollector {
     private gcConter: number = 0;
     private funcAddr: NativePointer;
 
-    public lastNewBlocks: number = 0;
+    private _lastNewBlocks: number = 0;
     private globalCoverage: Set<string> = new Set();
 
 
@@ -57,13 +57,13 @@ export class CoverageCollector {
                 for (const event of self.events) {
                     const addr = event[1]?.toString?.() ?? String(event[1]);
                     if (!self.globalCoverage.has(addr)) {
-                        console.log(`[*] New block found: ${addr}`);
                         self.globalCoverage.add(addr);
                         newBlocks++;
                     }
                 }
+
                 self.debug(`[+] New blocks in this run: ${newBlocks}, Total unique blocks: ${self.globalCoverage.size}`);
-                self.lastNewBlocks = newBlocks;
+                self._lastNewBlocks = newBlocks;
 
                 self.events = [];
             }
@@ -71,11 +71,17 @@ export class CoverageCollector {
 
     }
 
+    lastNewBlocks(): boolean {
+        const hasNew = this._lastNewBlocks > 0;
+        this._lastNewBlocks = 0;
+        return hasNew;
+    }
+
     getCoverage(): Set<string> {
         return this.globalCoverage;
     }
 
-    resetCoverage() {
+    reset() {
         this.globalCoverage.clear();
     }
 
@@ -89,17 +95,50 @@ export class Fuzzer {
     private corpus: CorpusManager;
     private coverage: CoverageCollector;
     private maxIters: number;
+    private minLength: number;
+    private maxLength: number;
 
-    constructor(targetFuncAddr: NativePointer, maxIters = 1000, initialInputs?: Uint8Array[]) {
-        this.corpus = new CorpusManager(initialInputs);
-        this.coverage = new CoverageCollector(targetFuncAddr, false);
+    constructor(targetFuncAddr: NativePointer, options: {
+        maxIters?: number,
+        minLength?: number,
+        maxLength?: number,
+        initialInputs?: Uint8Array[]
+    } = {}) {
+        const {
+            maxIters = 1000,
+            minLength = 1,  // TODO
+            maxLength = -1, // -1 means no limit
+            initialInputs = undefined
+        } = options;
+
         this.maxIters = maxIters;
+        this.minLength = minLength;
+        this.maxLength = maxLength;
+
+        if (!initialInputs || initialInputs.length === 0) {
+            const defaultInput = new Uint8Array(this.minLength).fill(0);
+            this.corpus = new CorpusManager([defaultInput]);
+        } else {
+            const validInitialInputs = initialInputs.filter(
+                input => input.length >= this.minLength && (this.maxLength === -1 || input.length <= this.maxLength)
+            );
+
+            if (validInitialInputs.length === 0) {
+                const defaultInput = new Uint8Array(this.minLength).fill(0);
+                this.corpus = new CorpusManager([defaultInput]);
+            } else {
+                this.corpus = new CorpusManager(validInitialInputs);
+            }
+        }
+
+
+        this.coverage = new CoverageCollector(targetFuncAddr, false);
         this.coverage.start();
     }
 
     run() {
         for (let i = 0; i < this.maxIters; i++) {
-            const input = Mutator.mutate(this.corpus.pick());
+            const input = this.mutateWithConstraints(this.corpus.pick());
 
             try {
                 this.fuzz(input);
@@ -108,7 +147,7 @@ export class Fuzzer {
                 continue;
             }
 
-            if (this.coverage.lastNewBlocks > 0) {
+            if (this.coverage.lastNewBlocks()) {
                 this.corpus.add(input);
                 console.log(`[+] New path found! Corpus size: ${this.corpus.size()}`);
             }
@@ -123,6 +162,24 @@ export class Fuzzer {
         this.corpus.getAll().forEach((item, idx) => {
             console.log(`[${idx}]:`, Array.from(item));
         });
+    }
+
+    private mutateWithConstraints(input: Uint8Array): Uint8Array {
+        let mutated = Mutator.mutate(input);
+        if (this.maxLength == -1) { return mutated; } // 不限制长度
+
+        if (mutated.length < this.minLength) {
+            const newInput = new Uint8Array(this.minLength);
+            newInput.set(mutated);
+            for (let i = mutated.length; i < this.minLength; i++) {
+                newInput[i] = Math.floor(Math.random() * 256);
+            }
+            mutated = newInput;
+        } else if (mutated.length > this.maxLength) {
+            mutated = mutated.slice(0, this.maxLength);
+        }
+
+        return mutated;
     }
 
     fuzz(input: Uint8Array) {
