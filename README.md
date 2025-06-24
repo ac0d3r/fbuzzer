@@ -25,5 +25,15 @@ frida-compile -S -c src/sample/example.ts -o _agent.js
 2. **Attach the Fuzzer Agent**
    
 ```sh
-frida -l _agent.js -n example
+frida -l example _agent.js
+```
+
+## Tools
+
+### URLSchemes
+
+- list iOS urlschemes
+
+```sh
+frida -U SpringBoard -l urlschemes/urlschemes.js
 ```
